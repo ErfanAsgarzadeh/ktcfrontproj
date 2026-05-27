@@ -1,3 +1,7 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.5
+ */
 'use client'
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Toolbar from '../components/Toolbar';
@@ -6,7 +10,7 @@ import GanttChart from '../components/GanttChart';
 import TaskDetailsPanel from '../components/TaskDetailsPanel';
 import ProjectHub from '../components/ProjectHub';
 import { TEMPLATES } from '../test/templates';
-import { ProjectNode, ActivityNode, Dependency, ZoomLevel, Project, Revision, CustomUser, TaskRole } from '../types/types';
+import { ProjectNode, ActivityNode, Dependency, ZoomLevel, Project, Revision, CustomUser, TaskRole, ChatMessage } from '../types/types';
 import {
   performWbsRollups,
   calculateCriticalPath,
@@ -15,7 +19,7 @@ import {
   adjustToWorkingDay,
   addWorkingDays
 } from '../utils/scheduler';
-import { HelpCircle, Sparkles, CodeSquare, FolderOpen } from 'lucide-react';
+import { HelpCircle, Sparkles, CodeSquare, FolderOpen, MessageSquare, ExternalLink, X, Send } from 'lucide-react';
 
 
 const DEFAULT_PROJECTS: Project[] = [
@@ -97,11 +101,34 @@ export default function App() {
     return DEFAULT_USERS;
   });
 
+  useEffect(() => {
+    // Fetch data from backend API
+    fetch('/api/projects')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.length > 0) setProjects(data);
+        })
+        .catch(err => console.error('Failed to fetch projects from backend:', err));
+
+    fetch('/api/users')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.length > 0) setUsers(data);
+        })
+        .catch(err => console.error('Failed to fetch users from backend:', err));
+  }, []);
+
   const [taskRoles, setTaskRoles] = useState<TaskRole[]>(() => {
     const saved = localStorage.getItem('nexus_task_roles');
     if (saved) return JSON.parse(saved);
     localStorage.setItem('nexus_task_roles', JSON.stringify(DEFAULT_TASK_ROLES));
     return DEFAULT_TASK_ROLES;
+  });
+
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
+    const saved = localStorage.getItem('nexus_chat_messages');
+    if (saved) return JSON.parse(saved);
+    return [];
   });
 
   const [activeProjectId, setActiveProjectId] = useState<string | null>(() => {
@@ -120,6 +147,95 @@ export default function App() {
   const [showCriticalPath, setShowCriticalPath] = useState<boolean>(true);
   const [autoSchedule, setAutoSchedule] = useState<boolean>(true);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
+  const [chatInputForModal, setChatInputForModal] = useState<string>('');
+  const [chatUserIdForModal, setChatUserIdForModal] = useState<string>('');
+
+  const [chatInput, setChatInput] = useState('');
+  const [chatUserId, setChatUserId] = useState('');
+
+  // Check if we are rendering in standalone chat view
+  if (typeof window !== 'undefined') {
+    const urlParams = new URL(window.location.href).searchParams;
+    const chatTaskId = urlParams.get('chat');
+
+    if (chatTaskId) {
+      const activeTask = nodes.find(n => n.id === chatTaskId) || JSON.parse(localStorage.getItem(`nexus_nodes_${activeRevisionId}`) || '[]').find((n:any) => n.id === chatTaskId);
+
+      const taskMessages = chatMessages.filter(m => m.taskId === chatTaskId).sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+      return (
+          <div className="h-screen w-full bg-[#0a0f1d] text-slate-200 flex flex-col font-sans">
+            <div className="bg-white/5 backdrop-blur-md px-4 py-3 border-b border-white/10 shrink-0 select-none flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                <h4 className="text-[12px] font-mono uppercase tracking-wider text-slate-300">
+                  Collaboration Chat: <span className="text-cyan-400">{activeTask?.name || chatTaskId}</span>
+                </h4>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4 scrollbar-thin scrollbar-thumb-white/10">
+              {taskMessages.length === 0 && (
+                  <div className="text-[11px] italic text-slate-500 text-center mt-10 p-6 bg-white/5 rounded-xl border border-white/5 mx-auto max-w-sm">No messages yet.</div>
+              )}
+              {taskMessages.map(msg => {
+                const sender = users.find(u => u.id === msg.userId);
+                return (
+                    <div key={msg.id} className="bg-black/40 border border-white/5 rounded-xl p-3 shadow-sm max-w-2xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] font-bold text-cyan-400">{sender?.username || 'Unknown'}</span>
+                        <span className="text-[10px] text-slate-500 font-mono">
+                           {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                         </span>
+                      </div>
+                      <p className="text-[13px] text-slate-300 bg-white/[0.02] p-3 rounded-lg inline-block w-full">{msg.text}</p>
+                    </div>
+                )
+              })}
+            </div>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              if (!chatInput.trim() || !chatUserId) return;
+
+              const newMessage: ChatMessage = {
+                id: `msg-${Date.now()}`,
+                taskId: chatTaskId,
+                userId: chatUserId,
+                text: chatInput.trim(),
+                timestamp: new Date().toISOString()
+              };
+              const updated = [...chatMessages, newMessage];
+              setChatMessages(updated);
+              localStorage.setItem('nexus_chat_messages', JSON.stringify(updated));
+
+              setChatInput('');
+            }} className="p-4 bg-black/40 border-t border-white/10 shrink-0">
+              <div className="flex items-center gap-3">
+                <select
+                    value={chatUserId}
+                    onChange={e => setChatUserId(e.target.value)}
+                    className="bg-slate-900 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-cyan-400 w-1/4 shrink-0"
+                >
+                  <option value="">Post as...</option>
+                  {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                </select>
+                <input
+                    value={chatInput} onChange={e=>setChatInput(e.target.value)}
+                    placeholder="Type a message..."
+                    className="flex-1 bg-slate-900 border border-white/10 rounded-lg px-4 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400 min-w-0"
+                />
+                <button
+                    type="submit" disabled={!chatInput.trim() || !chatUserId}
+                    className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-800 disabled:text-slate-500 text-white px-5 py-2 rounded-lg shrink-0 font-medium transition-colors"
+                >
+                  Send
+                </button>
+              </div>
+            </form>
+          </div>
+      );
+    }
+  }
   const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(true);
   const [ganttFilter, setGanttFilter] = useState<'both' | 'wbs' | 'activity'>('both');
   const [wbsTableWidth, setWbsTableWidth] = useState<number>(550);
@@ -509,6 +625,19 @@ export default function App() {
     const updated = taskRoles.filter(tr => tr.id !== roleId);
     setTaskRoles(updated);
     localStorage.setItem('nexus_task_roles', JSON.stringify(updated));
+  };
+
+  const handleAddChatMessage = (taskId: string, userId: string, text: string) => {
+    const newMessage: ChatMessage = {
+      id: `msg-${Date.now()}`,
+      taskId,
+      userId,
+      text,
+      timestamp: new Date().toISOString()
+    };
+    const updated = [...chatMessages, newMessage];
+    setChatMessages(updated);
+    localStorage.setItem('nexus_chat_messages', JSON.stringify(updated));
   };
 
   // Counting nodes dynamically per revision
@@ -1103,6 +1232,9 @@ export default function App() {
                           onDeleteTaskRole={handleDeleteTaskRole}
                           onAddActivity={handleAddActivity}
                           isEditMode={isEditMode}
+                          chatMessages={chatMessages}
+                          onAddChatMessage={handleAddChatMessage}
+                          onOpenChat={() => setIsChatOpen(true)}
                       />
                     </aside>
                 )}
@@ -1125,6 +1257,121 @@ export default function App() {
                   <span>Time: 2026 UTC Bounds</span>
                 </div>
               </footer>
+
+              {/* Full Screen Chat Modal Overlay */}
+              {!isEditMode && isChatOpen && selectedNode && selectedNode.type !== 'wbs' && (
+                  <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[150] flex items-center justify-center p-0 md:p-6 overflow-hidden">
+                    <div className="bg-slate-900 border border-white/10 shadow-3xl w-full h-full md:rounded-xl flex flex-col overflow-hidden max-w-5xl">
+                      {/* Modal Header */}
+                      <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0 bg-white/5">
+                        <div className="flex items-center gap-2">
+                          <MessageSquare className="w-5 h-5 text-cyan-400 animate-pulse" />
+                          <div>
+                            <h4 className="text-sm font-bold font-mono uppercase tracking-wider text-slate-200">
+                              Task Collaboration Chat
+                            </h4>
+                            <p className="text-[11px] text-slate-400">
+                              Selected: <span className="text-cyan-400">{selectedNode.name}</span>
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <button
+                              onClick={() => {
+                                window.open(`/?chat=${selectedNode.id}`, 'ChatWindow', 'width=450,height=600');
+                                setIsChatOpen(false);
+                              }}
+                              className="text-slate-400 hover:text-cyan-400 p-1.5 hover:bg-white/5 rounded transition-colors"
+                              title="Open in new window"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                          </button>
+                          <button
+                              onClick={() => setIsChatOpen(false)}
+                              className="text-slate-400 hover:text-white p-1.5 hover:bg-white/5 rounded transition-colors"
+                          >
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Message Log scrollable section */}
+                      <div className="flex-1 overflow-y-auto w-full flex justify-center scrollbar-thin scrollbar-thumb-white/10 p-6">
+                        <div className="w-full max-w-4xl space-y-4">
+                          {(() => {
+                            const nodeMessages = chatMessages.filter(m => m.taskId === selectedNode.id).sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+                            if (nodeMessages.length === 0) {
+                              return (
+                                  <div className="text-xs italic text-slate-500 text-center py-12 bg-black/20 rounded-xl border border-white/5 mx-auto max-w-md my-12">
+                                    No chat messages for this task yet. Start the conversation!
+                                  </div>
+                              );
+                            }
+                            return nodeMessages.map(msg => {
+                              const sender = users.find(u => u.id === msg.userId);
+                              return (
+                                  <div key={msg.id} className="bg-white/[0.02] border border-white/5 rounded-xl p-4 shadow-sm hover:border-white/10 transition-colors">
+                                    <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold text-cyan-400 flex items-center gap-2">
+                                {sender?.username || 'Unknown User'}
+                                <span className="text-[10px] font-mono text-slate-500 font-normal py-0.5 px-2 bg-white/5 rounded">
+                                 {sender?.jobTitle || 'N/A'}
+                                </span>
+                              </span>
+                                      <span className="text-[10px] text-slate-500 font-mono">
+                                {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                                    </div>
+                                    <p className="text-sm text-slate-200 leading-relaxed font-sans break-words bg-white/[0.01] p-3 rounded-lg inline-block w-full">
+                                      {msg.text}
+                                    </p>
+                                  </div>
+                              );
+                            });
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Send Chat input form */}
+                      <div className="bg-slate-800/60 border-t border-white/10 shrink-0 w-full flex justify-center p-4 sm:p-6 pb-6 shadow-2xl">
+                        <form onSubmit={(e) => {
+                          e.preventDefault();
+                          if (!chatInputForModal.trim() || !chatUserIdForModal) return;
+                          handleAddChatMessage(selectedNode.id, chatUserIdForModal, chatInputForModal.trim());
+                          setChatInputForModal('');
+                        }} className="w-full max-w-4xl space-y-4">
+                          <div className="flex items-center gap-3">
+                            <select
+                                value={chatUserIdForModal}
+                                onChange={e => setChatUserIdForModal(e.target.value)}
+                                className="bg-slate-900 border border-white/10 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-cyan-400 shrink-0 basis-1/3 sm:basis-1/4"
+                            >
+                              <option value="">Post as...</option>
+                              {users.map(u => (
+                                  <option key={u.id} value={u.id}>{u.username}</option>
+                              ))}
+                            </select>
+                            <input
+                                type="text"
+                                value={chatInputForModal}
+                                onChange={e => setChatInputForModal(e.target.value)}
+                                placeholder="Type a message..."
+                                className="flex-1 bg-slate-900 border border-white/10 rounded-lg px-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400 min-w-0"
+                            />
+                            <button
+                                type="submit"
+                                disabled={!chatInputForModal.trim() || !chatUserIdForModal}
+                                className="bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-800 disabled:text-slate-500 text-white px-4 py-2 rounded-lg font-mono text-xs transition-colors shrink-0 flex items-center gap-1.5"
+                            >
+                              <Send className="w-3.5 h-3.5" />
+                              <span>Send</span>
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+              )}
             </>
         )}
       </div>

@@ -95,3 +95,10 @@ export interface Revision {
   isBaseline: boolean;
 }
 
+export interface ChatMessage {
+  id: string;
+  taskId: string;
+  userId: string;
+  text: string;
+  timestamp: string;
+}
